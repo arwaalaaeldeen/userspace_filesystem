@@ -12,6 +12,15 @@
 #include <string.h>
 #include <unistd.h>
 
+static uint32_t hash_djb2(const char *str) {
+    uint32_t hash = 5381;
+    int c;
+    while ((c = *str++)) {
+        /* hash * 33 + c */
+        hash = ((hash << 5) + hash) + (uint32_t)c; 
+    }
+    return hash;
+}
 static int require_mounted(void)
 {
     if (!ufs_is_mounted()) {
