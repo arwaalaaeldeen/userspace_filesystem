@@ -70,17 +70,9 @@ int validate_path(const char *path)
     return 0;
 }
 
-int directory_find(uint32_t dir_inode_num, const char *name,
-                   uint32_t *out_inode_num)
-{
-    struct ufs_disk_dirent entries[UFS_BLOCK_SIZE / UFS_DIRENT_SIZE];
+int directory_find(uint32_t dir_inode_num, const char *name, uint32_t *target_inode_num) {
     struct ufs_inode directory;
-    uint32_t logical;
-
-    if (name == NULL || out_inode_num == NULL) {
-        errno = EINVAL;
-        return -1;
-    }
+    
     if (read_inode(dir_inode_num, &directory) != 0) {
         return -1;
     }
@@ -89,26 +81,54 @@ int directory_find(uint32_t dir_inode_num, const char *name,
         return -1;
     }
 
-    for (logical = 0; logical < directory.block_count; ++logical) {
-        uint32_t physical;
-        size_t slot;
+    // 1. Read the Master Index (Logical Block 0)
+    uint32_t index_block[128];
+    uint32_t index_phys;
+    
+    if (get_inode_data_block(&directory, 0, &index_phys) != 0 || index_phys == UFS_INVALID_BLOCK) {
+        errno = ENOENT;
+        return -1;
+    }
+    if (ufs_read_block(index_phys, index_block) != 0) {
+        return -1;
+    }
 
-        if (get_inode_data_block(&directory, logical, &physical) != 0 ||
-            physical == UFS_INVALID_BLOCK) {
-            errno = EIO;
+    // 2. Hash and Probe
+    uint32_t target_hash = hash_djb2(name);
+    uint32_t idx = target_hash % 128;
+    uint32_t start_idx = idx;
+
+    do {
+        if (index_block[idx] == UFS_INVALID_BLOCK) {
+            errno = ENOENT; // Hit an empty slot; the file is definitely not here.
             return -1;
         }
-        if (ufs_read_block(physical, entries) != 0) {
-            return -1;
-        }
-        for (slot = 0; slot < UFS_BLOCK_SIZE / UFS_DIRENT_SIZE; ++slot) {
-            if (entries[slot].used &&
-                strcmp(entries[slot].name, name) == 0) {
-                *out_inode_num = entries[slot].inode_number;
-                return 0;
+        
+        if (index_block[idx] == target_hash) {
+            // Found a hash match! Map index to the physical directory entry.
+            uint32_t logical_block = (idx / 8) + 1; // +1 because block 0 is the index
+            uint32_t offset = idx % 8;              // Which of the 8 slots in the block
+            uint32_t data_phys;
+            
+            if (get_inode_data_block(&directory, logical_block, &data_phys) == 0 && 
+                data_phys != UFS_INVALID_BLOCK) {
+                
+                struct ufs_disk_dirent entries[UFS_BLOCK_SIZE / UFS_DIRENT_SIZE];
+                if (ufs_read_block(data_phys, entries) == 0) {
+                    
+                    // Final string collision check
+                    if (entries[offset].used && strcmp(entries[offset].name, name) == 0) {
+                        *target_inode_num = entries[offset].inode_number;
+                        return 0; // Success!
+                    }
+                }
             }
         }
-    }
+        
+        // Hash collision, step forward
+        idx = (idx + 1) % 128;
+        
+    } while (idx != start_idx);
 
     errno = ENOENT;
     return -1;
