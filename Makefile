@@ -11,7 +11,7 @@ LIB_SOURCES := $(addprefix src/,$(addsuffix .c,$(MODULES)))
 LIB_OBJECTS := $(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(MODULES)))
 
 TEST_NAMES := test_integration test_storage_v2 test_journal test_metadata \
-	test_links test_mmap test_permissions_namespace test_crash_recovery
+    test_links test_mmap test_permissions_namespace test_crash_recovery test_hash_dir
 TEST_BINS := $(addprefix $(BUILD_DIR)/,$(TEST_NAMES))
 
 .PHONY: all test concurrency sanitize shell clean tree
