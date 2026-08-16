@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "include/userfs.h" // Adjust if your public header path is different
+#include "userfs.h"
 
 int main() {
     printf("--- Testing O(1) Hashed Directory Index ---\n");
