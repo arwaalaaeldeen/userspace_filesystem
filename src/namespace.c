@@ -388,79 +388,85 @@ int directory_add(uint32_t dir_inode_num, const char *name,
         errno = EINVAL;
         return -1;
     }
-    if (read_inode(dir_inode_num, &directory) != 0) {
-        return -1;
-    }
+    if (read_inode(dir_inode_num, &directory) != 0) return -1;
     if (directory.type != UFS_TYPE_DIR) {
         errno = ENOTDIR;
         return -1;
     }
-    
-    // This now uses our blazing fast O(1) lookup
     if (directory_find(dir_inode_num, name, &existing) == 0) {
         errno = EEXIST;
         return -1;
     }
-    if (errno != ENOENT) {
-        return -1;
-    }
+    if (errno != ENOENT) return -1;
 
-    // 1. Read the Master Index (Logical Block 0)
+    // 1. Handle the Root Directory Edge-Case (Auto-allocate the index!)
     uint32_t index_block[128];
     uint32_t index_phys;
-    
-    // Assuming directory initialization writes UFS_INVALID_BLOCK to block 0
+    int inode_updated = 0;
+
     if (get_inode_data_block(&directory, 0, &index_phys) != 0 || index_phys == UFS_INVALID_BLOCK) {
-        return -1; 
-    }
-    if (ufs_read_block(index_phys, index_block) != 0) {
-        return -1;
+        if (allocate_data_block(&index_phys) != 0) return -1;
+        
+        directory.direct[0] = index_phys;
+        if (directory.block_count < 1) directory.block_count = 1;
+        if (directory.size < UFS_BLOCK_SIZE) directory.size = UFS_BLOCK_SIZE;
+        inode_updated = 1;
+
+        for (int i = 0; i < 128; i++) index_block[i] = UFS_INVALID_BLOCK;
+    } else {
+        if (ufs_read_block(index_phys, index_block) != 0) return -1;
     }
 
-    // 2. Hash and find an empty slot
+    // 2. Hash and probe for an empty slot
     uint32_t target_hash = hash_djb2(name);
     uint32_t idx = target_hash % 128;
     uint32_t start_idx = idx;
 
     do {
         if (index_block[idx] == UFS_INVALID_BLOCK) {
-            // We found an empty slot in the index!
             uint32_t logical_block = (idx / 8) + 1;
             uint32_t offset = idx % 8;
             uint32_t data_phys;
-            
-            // NOTE: If your filesystem doesn't auto-allocate missing blocks inside get_inode_data_block, 
-            // you will need to call your block allocator (e.g., ensure_inode_data_block) right here.
+
+            // 3. Auto-allocate the physical data block if the hash jumps to a gap
             if (get_inode_data_block(&directory, logical_block, &data_phys) != 0 || data_phys == UFS_INVALID_BLOCK) {
-                // FALLBACK: allocate physical block, zero it out, and map it to logical_block here
-                return -1; 
+                if (allocate_data_block(&data_phys) != 0) return -1;
+
+                if (logical_block < 8) {
+                    directory.direct[logical_block] = data_phys;
+                } else {
+                    errno = ENOSPC; // Failsafe for direct blocks
+                    return -1;
+                }
+
+                if (directory.block_count <= logical_block) {
+                    directory.block_count = logical_block + 1;
+                    directory.size = directory.block_count * UFS_BLOCK_SIZE;
+                }
+                inode_updated = 1;
+                memset(entries, 0, UFS_BLOCK_SIZE);
+            } else {
+                if (ufs_read_block(data_phys, entries) != 0) memset(entries, 0, UFS_BLOCK_SIZE);
             }
-            
-            // Read the block, update the specific offset, and write it back
-            if (ufs_read_block(data_phys, entries) != 0) {
-                memset(entries, 0, UFS_BLOCK_SIZE); // Failsafe zero out
-            }
-            
+
+            // 4. Write entry and update index
             memset(&entries[offset], 0, sizeof(entries[offset]));
             entries[offset].used = 1;
             entries[offset].inode_number = target_inode_num;
             entries[offset].type = type;
             strcpy(entries[offset].name, name);
+
+            if (ufs_write_block(data_phys, entries) != 0) return -1;
             
-            if (ufs_write_block(data_phys, entries) != 0) {
-                return -1;
-            }
-            
-            // 3. Update the Master Index and save it to disk
             index_block[idx] = target_hash;
-            return ufs_write_block(index_phys, index_block);
+            if (ufs_write_block(index_phys, index_block) != 0) return -1;
+
+            if (inode_updated) return write_inode(dir_inode_num, &directory);
+            return 0;
         }
-        
         idx = (idx + 1) % 128;
-        
     } while (idx != start_idx);
 
-    // If we looped all 128 slots and didn't find an empty one, the directory is full!
     errno = ENOSPC;
     return -1;
 }
@@ -483,7 +489,7 @@ int directory_remove(uint32_t dir_inode_num, const char *name)
         return -1;
     }
 
-    for (logical = 0; logical < directory.block_count; ++logical) {
+    for (logical = 1; logical < directory.block_count; ++logical) {
         uint32_t physical;
         size_t slot;
 
@@ -516,7 +522,7 @@ int directory_is_empty(uint32_t dir_inode_num)
         errno = ENOTDIR;
         return -1;
     }
-    for (logical = 0; logical < directory.block_count; ++logical) {
+    for (logical = 1; logical < directory.block_count; ++logical) {
         uint32_t physical;
         size_t slot;
 
@@ -802,7 +808,7 @@ static int ufs_listdir_unlocked(const char *path,
         return -1;
     }
 
-    for (logical = 0; logical < directory.block_count && copied < max_entries;
+    for (logical = 1; logical < directory.block_count && copied < max_entries;
          ++logical) {
         uint32_t physical;
         size_t slot;
