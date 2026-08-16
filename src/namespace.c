@@ -95,7 +95,7 @@ int directory_find(uint32_t dir_inode_num, const char *name, uint32_t *target_in
 
     // 2. Hash and Probe
     uint32_t target_hash = hash_djb2(name);
-    uint32_t idx = target_hash % 128;
+    uint32_t idx = target_hash % 56;
     uint32_t start_idx = idx;
 
     do {
@@ -419,7 +419,7 @@ int directory_add(uint32_t dir_inode_num, const char *name,
 
     // 2. Hash and probe for an empty slot
     uint32_t target_hash = hash_djb2(name);
-    uint32_t idx = target_hash % 128;
+    uint32_t idx = target_hash % 56;
     uint32_t start_idx = idx;
 
     do {
@@ -464,7 +464,7 @@ int directory_add(uint32_t dir_inode_num, const char *name,
             if (inode_updated) return write_inode(dir_inode_num, &directory);
             return 0;
         }
-        idx = (idx + 1) % 128;
+        idx = (idx + 1) % 56;
     } while (idx != start_idx);
 
     errno = ENOSPC;
