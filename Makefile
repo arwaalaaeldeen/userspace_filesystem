@@ -39,6 +39,7 @@ test: $(TEST_BINS)
 	$(BUILD_DIR)/test_mmap
 	$(BUILD_DIR)/test_permissions_namespace
 	$(BUILD_DIR)/test_crash_recovery
+    $(BUILD_DIR)/test_hash_dir
 
 concurrency: $(BUILD_DIR)/test_threads $(BUILD_DIR)/test_processes
 	$(BUILD_DIR)/test_threads
