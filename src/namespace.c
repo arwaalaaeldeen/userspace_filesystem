@@ -577,6 +577,44 @@ static int create_node(const char *path, uint32_t type)
         errno = saved_errno;
         return -1;
     }
+    // ---------------------------------------------------------
+    // STEP 2: INITIALIZE THE DIRECTORY HASH INDEX (Logical Block 0)
+    // ---------------------------------------------------------
+    if (type == UFS_TYPE_DIR) {
+        uint32_t index_block[128]; // 128 slots * 4 bytes = 512 bytes
+        
+        // Fill the index with "empty" sentinels
+        for (int i = 0; i < 128; i++) {
+            index_block[i] = UFS_INVALID_BLOCK;
+        }
+
+        uint32_t phys_block;
+        
+        // Allocate a brand new physical data block for this index
+        if (allocate_data_block(&phys_block) != 0) {
+            int saved_errno = errno;
+            (void)free_inode(inode_num); 
+            errno = saved_errno;
+            return -1; 
+        }
+
+        // Attach it to the inode's first direct pointer
+        inode.direct[0] = phys_block;
+        
+        // The directory now technically owns 1 block
+        inode.block_count = 1; 
+        inode.size = UFS_BLOCK_SIZE;
+
+        // Write the empty hash map array to the physical disk sector
+        if (ufs_write_block(phys_block, index_block) != 0) {
+            int saved_errno = errno;
+            (void)free_data_block(phys_block);
+            (void)free_inode(inode_num);
+            errno = saved_errno;
+            return -1;
+        }
+    }
+    // ---------------------------------------------------------
     if (write_inode(inode_num, &inode) != 0 ||
         directory_add(parent, name, inode_num, type) != 0) {
         int saved_errno = errno;
